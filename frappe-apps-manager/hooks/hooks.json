@@ -2,59 +2,83 @@
   "hooks": {
     "PreToolUse": [
       {
-        "name": "frappe-context-detector",
-        "description": "Detect if we're working in a Frappe bench directory",
-        "hooks": ["Bash", "Write", "Edit"],
-        "command": "if [ -f 'sites/common_site_config.json' ]; then echo '✓ Frappe bench detected'; else echo '⚠ Not in Frappe bench directory'; fi"
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f 'sites/common_site_config.json' ]; then echo '✓ Frappe bench detected'; else echo '⚠ Not in Frappe bench directory'; fi"
+          }
+        ]
       },
       {
-        "name": "frappe-test-file-validator",
-        "description": "Validate test file naming and location",
-        "hooks": ["Write"],
-        "command": "if [[ \"$TOOL_INPUT_FILE\" == *test_*.py ]]; then if [[ \"$TOOL_INPUT_FILE\" != */doctype/* ]] && [[ \"$TOOL_INPUT_FILE\" != */tests/* ]]; then echo '⚠ Test files should be in doctype/ or tests/ directory'; fi; fi"
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *test_*.py ]]; then if [[ \"$file_path\" != */doctype/* ]] && [[ \"$file_path\" != */tests/* ]]; then echo '⚠ Test files should be in doctype/ or tests/ directory'; fi; fi; }"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "name": "frappe-auto-migrate",
-        "description": "Suggest running migrations after DocType changes",
-        "hooks": ["Write", "Edit"],
-        "command": "if [[ \"$TOOL_OUTPUT_FILE\" == *.json ]] && [[ \"$TOOL_OUTPUT_FILE\" == */doctype/* ]]; then echo '💡 Reminder: Run migrations with /frappe-migrate'; fi"
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *.json ]] && [[ \"$file_path\" == */doctype/* ]]; then echo '💡 Reminder: Run migrations with /frappe-migrate'; fi; }"
+          }
+        ]
       },
       {
-        "name": "frappe-test-reminder",
-        "description": "Remind to run tests after code changes",
-        "hooks": ["Write", "Edit"],
-        "command": "if [[ \"$TOOL_OUTPUT_FILE\" == *.py ]] && [[ \"$TOOL_OUTPUT_FILE\" == */doctype/*.py ]] && [[ \"$TOOL_OUTPUT_FILE\" != *test_*.py ]]; then echo '✓ Code updated. Consider running tests with /frappe-test'; fi"
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *.py ]] && [[ \"$file_path\" == */doctype/*.py ]] && [[ \"$file_path\" != *test_*.py ]]; then echo '✓ Code updated. Consider running tests with /frappe-test'; fi; }"
+          }
+        ]
       },
       {
-        "name": "frappe-cache-clear-reminder",
-        "description": "Suggest clearing cache after JavaScript changes",
-        "hooks": ["Write", "Edit"],
-        "command": "if [[ \"$TOOL_OUTPUT_FILE\" == *.js ]] && [[ \"$TOOL_OUTPUT_FILE\" == */doctype/*.js ]]; then echo '💡 Reminder: Clear cache with /frappe-cache for JS changes to take effect'; fi"
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" == *.js ]] && [[ \"$file_path\" == */doctype/*.js ]]; then echo '💡 Reminder: Clear cache with /frappe-cache for JS changes to take effect'; fi; }"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
       {
-        "name": "frappe-bench-validator",
-        "description": "Validate bench setup before Frappe operations",
+        "matcher": "",
         "keywords": ["frappe", "bench", "doctype", "migrate"],
-        "hooks": [],
-        "command": "echo '🔍 Checking Frappe bench setup...'; if [ -f 'sites/common_site_config.json' ]; then echo '✓ Valid bench directory'; bench --version 2>/dev/null || echo '⚠ Bench command not found'; else echo '❌ Not a Frappe bench directory'; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🔍 Checking Frappe bench setup...'; if [ -f 'sites/common_site_config.json' ]; then echo '✓ Valid bench directory'; bench --version 2>/dev/null || echo '⚠ Bench command not found'; else echo '❌ Not a Frappe bench directory'; fi"
+          }
+        ]
       },
       {
-        "name": "frappe-site-check",
-        "description": "Check if site exists for site-specific operations",
+        "matcher": "",
         "keywords": ["site", "test", "migrate", "backup", "console"],
-        "hooks": [],
-        "command": "if [ -f 'sites/common_site_config.json' ]; then site_count=$(ls -d sites/*/ 2>/dev/null | wc -l); if [ $site_count -gt 0 ]; then echo \"✓ Found $site_count site(s)\"; else echo '⚠ No sites found. Create one with /frappe-new-site'; fi; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -f 'sites/common_site_config.json' ]; then site_count=$(ls -d sites/*/ 2>/dev/null | wc -l); if [ $site_count -gt 0 ]; then echo \"✓ Found $site_count site(s)\"; else echo '⚠ No sites found. Create one with /frappe-new-site'; fi; fi"
+          }
+        ]
       },
       {
-        "name": "frappe-redis-check",
-        "description": "Verify Redis is running for cache operations",
+        "matcher": "",
         "keywords": ["cache", "redis", "clear cache"],
-        "hooks": [],
-        "command": "if command -v redis-cli >/dev/null 2>&1; then if redis-cli ping >/dev/null 2>&1; then echo '✓ Redis is running'; else echo '⚠ Redis is not responding. Start with: sudo systemctl start redis-server'; fi; fi"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v redis-cli >/dev/null 2>&1; then if redis-cli ping >/dev/null 2>&1; then echo '✓ Redis is running'; else echo '⚠ Redis is not responding. Start with: sudo systemctl start redis-server'; fi; fi"
+          }
+        ]
       }
     ]
   }
