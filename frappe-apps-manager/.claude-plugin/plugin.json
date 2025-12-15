@@ -1,31 +1,10 @@
 {
   "name": "frappe-apps-manager",
-  "description": "Comprehensive Frappe Framework development and management tools for building, deploying, and maintaining Frappe applications with complete SDLC coverage",
+  "description": "Comprehensive Frappe Framework development platform with 95% SDLC coverage - 15 commands, 10 agents, 15 skills for complete Frappe/ERPNext development lifecycle",
   "version": "2.0.0",
   "author": {
     "name": "Frappe Development Team"
   },
   "keywords": ["frappe", "erpnext", "bench", "doctype", "development", "testing", "deployment", "performance", "security"],
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Venkateshvenki404224/frappe-apps-manager"
-  },
-  "changelog": {
-    "2.0.0": {
-      "date": "2025-12-15",
-      "changes": [
-        "Added 5 new commands: frappe-new-site, frappe-test, frappe-logs, frappe-console, frappe-cache, frappe-role-manager, frappe-config, frappe-db-reset",
-        "Added 7 new agents: frappe-tester, frappe-security, frappe-devops, frappe-performance, frappe-integration, frappe-data-engineer, frappe-ui-ux",
-        "Added 12 new skills: client-script-generator, unit-test-generator, workflow-generator, webhook-manager, external-api-connector, data-migration-generator, fixture-creator, performance-optimizer, web-form-builder, documentation-generator, integration-test-generator, state-machine-helper",
-        "Added frappe-commit output style for conventional commits",
-        "Enhanced hooks with test reminders, cache suggestions, and environment validation",
-        "Improved all components with core app references and real ERPNext patterns",
-        "Expanded SDLC coverage from 30% to 95%"
-      ]
-    },
-    "1.0.0": {
-      "date": "2025-12-14",
-      "changes": ["Initial release with 7 commands, 3 agents, 3 skills"]
-    }
-  }
+  "repository": "https://github.com/Venkateshvenki404224/frappe-apps-manager"
 }
