@@ -7,6 +7,16 @@ description: Generate JavaScript client-side form scripts for Frappe DocTypes. U
 
 Generate production-ready JavaScript form scripts for Frappe DocTypes with proper event handlers, validations, and custom functionality.
 
+## Global Rules
+
+These Frappe conventions apply to everything this skill generates, and override any conflicting example below.
+
+- **Bench commands:** use bare `bench` (never `./env/bin/bench` or a full path). Always pass `--site <site>` explicitly — never run a bare `bench migrate` / `bench run-tests`. Run `bench start` in the background and only if it isn't already running. Don't run discovery commands (`which bench`, `bench --version`).
+- **DocType files** live at `apps/<app>/<app>/<module>/doctype/<name>/<name>.json` — the app name appears twice (directory + Python package) — with an empty `__init__.py` alongside. Never `mkdir` the folder; write the JSON and run `bench --site <site> migrate` to create the structure. Don't add `creation`, `modified`, `owner`, `modified_by`, or `docstatus` as fields — Frappe manages them.
+- **Database & ORM:** prefer `frappe.qb.get_query()` over raw `frappe.db.sql()`. Use `frappe.db.get_all()` for server logic (ignores permissions) and `frappe.db.get_list()` for user-facing APIs (enforces them). Never use `frappe.db.set_value()` on a field with validation or lifecycle logic — load the doc and `doc.save()` so controller hooks run. Batch-fetch related records; never query inside a loop (N+1).
+- **Never call `frappe.db.commit()`** in controllers, request handlers, background jobs, or patches — Frappe auto-commits on success and rolls back on uncaught errors. Flush manually only to make a write visible to a subsequent `frappe.enqueue()` (or pass `enqueue_after_commit=True`).
+- **Permissions & APIs:** put permission checks inside controller methods (enforced on every call path), not in API wrappers. Type-hint every `@frappe.whitelist()` parameter so Frappe validates and casts it, and pass `methods=[...]` to pin the HTTP verb.
+
 ## When to Use This Skill
 
 Claude should invoke this skill when:
@@ -214,6 +224,20 @@ frappe.ui.form.on('Sales Invoice', {
 
 ### 5. Data Fetching and API Calls
 
+> Two ways to reach the server. Use `frm.call("<method>")` to invoke a `@frappe.whitelist()` **method on the current DocType controller** (Frappe passes the document automatically). Use `frappe.call({ method, args })` for a standalone whitelisted module function. In both cases the `args` keys and values must match the method's **type-hinted parameter signature** — Frappe validates and casts each argument against those hints, so a mismatch will raise.
+
+```javascript
+// Controller method: @frappe.whitelist() def get_summary(self) on the Expense DocType
+frm.call("get_summary").then(r => frappe.msgprint(r.message));
+
+// Standalone whitelisted function: def get_expenses(status: str)
+frappe.call({
+    method: 'my_app.api.get_expenses',
+    args: { status: 'Draft' },   // names/types must match the Python signature
+    callback: r => console.log(r.message)
+});
+```
+
 **Fetch from Database**:
 ```javascript
 // Pattern from: erpnext/stock/doctype/item/item.js
@@ -257,6 +281,8 @@ frappe.ui.form.on('Payment Entry', {
 ```
 
 ### 6. Form Validations
+
+> **Client-side validation is UX only.** It gives the user immediate feedback but can be bypassed (API calls, scripts, imports). The authoritative validation must live in the Python controller's `validate()` method. Mirror critical rules in both places, but never rely on the client script alone to enforce data integrity.
 
 **Before Save Validation**:
 ```javascript
@@ -526,9 +552,9 @@ frappe.ui.form.on('Stock Entry', {
 
 ## File Output Format
 
-Generated client scripts should be saved at:
+Generated client scripts should be saved at (the app name appears twice — directory + Python package):
 ```
-apps/<app_name>/<module>/doctype/<doctype_name>/<doctype_name>.js
+apps/<app>/<app>/<module>/doctype/<doctype_name>/<doctype_name>.js
 ```
 
 Always include:

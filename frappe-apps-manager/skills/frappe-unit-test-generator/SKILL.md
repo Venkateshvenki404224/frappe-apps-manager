@@ -7,6 +7,16 @@ description: Generate comprehensive unit tests for Frappe DocTypes, controllers,
 
 Generate production-ready unit tests for Frappe applications following patterns from ERPNext and Frappe core.
 
+## Global Rules
+
+These Frappe conventions apply to everything this skill generates, and override any conflicting example below.
+
+- **Bench commands:** use bare `bench` (never `./env/bin/bench` or a full path). Always pass `--site <site>` explicitly — never run a bare `bench migrate` / `bench run-tests`. Run `bench start` in the background and only if it isn't already running. Don't run discovery commands (`which bench`, `bench --version`).
+- **DocType files** live at `apps/<app>/<app>/<module>/doctype/<name>/<name>.json` — the app name appears twice (directory + Python package) — with an empty `__init__.py` alongside. Never `mkdir` the folder; write the JSON and run `bench --site <site> migrate` to create the structure. Don't add `creation`, `modified`, `owner`, `modified_by`, or `docstatus` as fields — Frappe manages them.
+- **Database & ORM:** prefer `frappe.qb.get_query()` over raw `frappe.db.sql()`. Use `frappe.db.get_all()` for server logic (ignores permissions) and `frappe.db.get_list()` for user-facing APIs (enforces them). Never use `frappe.db.set_value()` on a field with validation or lifecycle logic — load the doc and `doc.save()` so controller hooks run. Batch-fetch related records; never query inside a loop (N+1).
+- **Never call `frappe.db.commit()`** in controllers, request handlers, background jobs, or patches — Frappe auto-commits on success and rolls back on uncaught errors. Flush manually only to make a write visible to a subsequent `frappe.enqueue()` (or pass `enqueue_after_commit=True`).
+- **Permissions & APIs:** put permission checks inside controller methods (enforced on every call path), not in API wrappers. Type-hint every `@frappe.whitelist()` parameter so Frappe validates and casts it, and pass `methods=[...]` to pin the HTTP verb.
+
 ## When to Use This Skill
 
 Claude should invoke this skill when:
@@ -18,28 +28,46 @@ Claude should invoke this skill when:
 - User wants to set up test fixtures or test data
 - User needs to test permissions or workflows
 
+## Test Site
+
+Run tests on a **separate site** from the one the user is actively developing on. Tests create, modify, and delete data — running them on the dev site will pollute it.
+
+Convention: if the dev site is `app.localhost`, create `app-test.localhost` for tests and install the app there:
+```bash
+bench new-site app-test.localhost --admin-password admin
+bench --site app-test.localhost install-app <app>
+```
+
+Always run tests against the test site, and always pass `--site` — never run a bare `bench run-tests`:
+```bash
+bench --site app-test.localhost run-tests --app <app>
+```
+
+If tests fail with "DocType not found", run `bench --site app-test.localhost migrate` first.
+
+## Choosing a Base Class
+
+- **DB-backed tests** (anything that creates/reads documents) inherit from `frappe.tests.IntegrationTestCase` — **not** `unittest.TestCase`. Tests run inside a transaction that automatically rolls back, so no manual cleanup or `frappe.db.rollback()` is needed.
+- **Pure-logic tests** (utility functions, calculations, parsing — no DB or Frappe context) inherit from `frappe.tests.UnitTestCase`. It skips DB setup/teardown, so it is faster.
+- Test files are named `test_<doctype>.py`; test classes are `Test<DocTypeName>`; each test method starts with `test_`.
+- Test expected exceptions with `self.assertRaises(frappe.ValidationError, doc.insert)`.
+
 ## Capabilities
 
 ### 1. DocType Test File Structure
 
-Generate complete test files following Frappe's unittest framework.
+Generate complete test files following Frappe's testing framework.
 
-**Basic Test Structure** (from ERPNext Item):
+**Basic Test Structure** (DB-backed, uses `IntegrationTestCase`):
 ```python
-# Pattern from: erpnext/stock/doctype/item/test_item.py
 import frappe
-import unittest
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
-class TestItem(FrappeTestCase):
+class TestItem(IntegrationTestCase):
     def setUp(self):
-        """Set up test fixtures before each test"""
+        """Set up test fixtures before each test (transaction auto-rolls-back)"""
         frappe.set_user("Administrator")
         self.test_item = self._create_test_item()
-
-    def tearDown(self):
-        """Clean up after each test"""
-        frappe.db.rollback()
 
     def test_item_creation(self):
         """Test basic item creation"""
@@ -75,12 +103,23 @@ class TestItem(FrappeTestCase):
         return item
 ```
 
+**Pure-Logic Test** (no DB, uses `UnitTestCase`):
+```python
+from frappe.tests import UnitTestCase
+from my_app.utils import calculate_tax
+
+class TestTaxUtils(UnitTestCase):
+    def test_calculate_tax(self):
+        """Pure calculation — no Frappe context or database needed"""
+        self.assertEqual(calculate_tax(100, 0.1), 10)
+```
+
 ### 2. Validation Testing
 
 **Test Controller Validations** (from Sales Invoice):
 ```python
 # Pattern from: erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py
-class TestSalesInvoice(FrappeTestCase):
+class TestSalesInvoice(IntegrationTestCase):
     def test_posting_date_validation(self):
         """Test posting date cannot be future date"""
         si = self._get_test_sales_invoice()
@@ -128,7 +167,7 @@ class TestSalesInvoice(FrappeTestCase):
 **Test Amount Calculations** (from Sales Invoice):
 ```python
 # Pattern from: erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py
-class TestSalesInvoice(FrappeTestCase):
+class TestSalesInvoice(IntegrationTestCase):
     def test_total_calculation(self):
         """Test total amount calculation"""
         si = frappe.get_doc({
@@ -176,7 +215,7 @@ class TestSalesInvoice(FrappeTestCase):
 **Test Document States** (from Stock Entry):
 ```python
 # Pattern from: erpnext/stock/doctype/stock_entry/test_stock_entry.py
-class TestStockEntry(FrappeTestCase):
+class TestStockEntry(IntegrationTestCase):
     def test_submit_workflow(self):
         """Test document submission"""
         se = self._get_test_stock_entry()
@@ -229,7 +268,7 @@ class TestStockEntry(FrappeTestCase):
 **Test Role Permissions** (from Frappe Core):
 ```python
 # Pattern from: frappe/tests/test_permissions.py
-class TestCustomerPermissions(FrappeTestCase):
+class TestCustomerPermissions(IntegrationTestCase):
     def setUp(self):
         self.test_user = "test@example.com"
         self._setup_test_user()
@@ -295,7 +334,7 @@ class TestCustomerPermissions(FrappeTestCase):
 **Test Whitelisted Methods** (from Frappe Core):
 ```python
 # Pattern from: frappe/tests/test_api.py
-class TestCustomerAPI(FrappeTestCase):
+class TestCustomerAPI(IntegrationTestCase):
     def test_get_customer_details(self):
         """Test API method returns correct data"""
         from my_app.api import get_customer_details
@@ -351,7 +390,7 @@ class TestCustomerAPI(FrappeTestCase):
 **Test Database Operations**:
 ```python
 # Pattern from: frappe/tests/test_db.py
-class TestCustomerQueries(FrappeTestCase):
+class TestCustomerQueries(IntegrationTestCase):
     def test_get_all_with_filters(self):
         """Test frappe.get_all with filters"""
         customers = frappe.get_all(
@@ -408,7 +447,7 @@ class TestCustomerQueries(FrappeTestCase):
 **Test Child Table Operations** (from Sales Invoice):
 ```python
 # Pattern from: erpnext/accounts/doctype/sales_invoice/test_sales_invoice.py
-class TestSalesInvoiceItems(FrappeTestCase):
+class TestSalesInvoiceItems(IntegrationTestCase):
     def test_add_items(self):
         """Test adding items to child table"""
         si = self._get_test_sales_invoice()
@@ -451,7 +490,7 @@ class TestSalesInvoiceItems(FrappeTestCase):
 **Create Reusable Test Data**:
 ```python
 # Pattern from: erpnext/setup/doctype/company/test_company.py
-class TestCompany(FrappeTestCase):
+class TestCompany(IntegrationTestCase):
     @classmethod
     def setUpClass(cls):
         """Set up class-level fixtures"""
@@ -504,7 +543,7 @@ class TestCompany(FrappeTestCase):
 # Pattern from: frappe/tests/test_email.py
 from unittest.mock import patch, MagicMock
 
-class TestEmailNotification(FrappeTestCase):
+class TestEmailNotification(IntegrationTestCase):
     @patch('frappe.sendmail')
     def test_send_notification(self, mock_sendmail):
         """Test email notification is sent"""
@@ -537,9 +576,9 @@ class TestEmailNotification(FrappeTestCase):
 
 ### File Structure
 
-**Standard Test File Location**:
+**Standard Test File Location** (the app name appears twice — directory + Python package):
 ```
-apps/my_app/
+apps/my_app/my_app/
 └── my_module/
     └── doctype/
         └── my_doctype/
@@ -548,6 +587,8 @@ apps/my_app/
             ├── my_doctype.js
             └── test_my_doctype.py  ← Test file here
 ```
+
+For feature-wise tests that span multiple DocTypes, place them in the app's tests directory: `apps/<app>/<app>/tests/test_<feature>.py`.
 
 ### Test Naming Conventions
 
@@ -559,7 +600,7 @@ apps/my_app/
 ### Test Method Organization
 
 ```python
-class TestMyDocType(FrappeTestCase):
+class TestMyDocType(IntegrationTestCase):
     # 1. Setup and teardown
     def setUp(self):
         pass
@@ -618,8 +659,8 @@ class TestMyDocType(FrappeTestCase):
 ## Best Practices
 
 1. **Test Independence**: Each test should run independently
-2. **Use setUp/tearDown**: Clean state before/after each test
-3. **Use Rollback**: Call `frappe.db.rollback()` in tearDown
+2. **Use the right base class**: `IntegrationTestCase` for DB tests, `UnitTestCase` for pure logic
+3. **Rely on auto-rollback**: `IntegrationTestCase` runs each test in a transaction that rolls back — no manual `frappe.db.rollback()` cleanup needed
 4. **Test One Thing**: Each test should verify one behavior
 5. **Descriptive Names**: Test names should describe what they test
 6. **Use Assertions**: Use specific assertions (`assertEqual`, not just `assertTrue`)
@@ -663,16 +704,21 @@ self.assertIsInstance(obj, MyClass)
 
 ## Running Tests
 
+Always pass `--site` (point it at the dedicated test site). Never run a bare `bench run-tests`.
+
 ```bash
 # Run all tests for an app
-bench --site test_site run-tests --app my_app
+bench --site app-test.localhost run-tests --app my_app
 
-# Run tests for specific doctype
-bench --site test_site run-tests --doctype "My DocType"
+# Run tests for a specific doctype
+bench --site app-test.localhost run-tests --doctype "My DocType"
 
-# Run specific test file
-bench --site test_site run-tests --test test_my_doctype
+# Run a specific test module (file)
+bench --site app-test.localhost run-tests --module my_app.my_module.doctype.my_doctype.test_my_doctype
 
-# Run with coverage
-bench --site test_site run-tests --app my_app --coverage
+# Run a single test method
+bench --site app-test.localhost run-tests --module my_app.my_module.doctype.my_doctype.test_my_doctype --test test_item_creation
+
+# Verbose output
+bench --site app-test.localhost run-tests --app my_app -v
 ```

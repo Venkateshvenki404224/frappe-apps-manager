@@ -7,6 +7,16 @@ description: Generate custom reports, query reports, and script reports for Frap
 
 Create custom reports for data analysis, dashboards, and business intelligence in Frappe.
 
+## Global Rules
+
+These Frappe conventions apply to everything this skill generates, and override any conflicting example below.
+
+- **Bench commands:** use bare `bench` (never `./env/bin/bench` or a full path). Always pass `--site <site>` explicitly — never run a bare `bench migrate` / `bench run-tests`. Run `bench start` in the background and only if it isn't already running. Don't run discovery commands (`which bench`, `bench --version`).
+- **DocType files** live at `apps/<app>/<app>/<module>/doctype/<name>/<name>.json` — the app name appears twice (directory + Python package) — with an empty `__init__.py` alongside. Never `mkdir` the folder; write the JSON and run `bench --site <site> migrate` to create the structure. Don't add `creation`, `modified`, `owner`, `modified_by`, or `docstatus` as fields — Frappe manages them.
+- **Database & ORM:** prefer `frappe.qb.get_query()` over raw `frappe.db.sql()`. Use `frappe.db.get_all()` for server logic (ignores permissions) and `frappe.db.get_list()` for user-facing APIs (enforces them). Never use `frappe.db.set_value()` on a field with validation or lifecycle logic — load the doc and `doc.save()` so controller hooks run. Batch-fetch related records; never query inside a loop (N+1).
+- **Never call `frappe.db.commit()`** in controllers, request handlers, background jobs, or patches — Frappe auto-commits on success and rolls back on uncaught errors. Flush manually only to make a write visible to a subsequent `frappe.enqueue()` (or pass `enqueue_after_commit=True`).
+- **Permissions & APIs:** put permission checks inside controller methods (enforced on every call path), not in API wrappers. Type-hint every `@frappe.whitelist()` parameter so Frappe validates and casts it, and pass `methods=[...]` to pin the HTTP verb.
+
 ## When to Use This Skill
 
 Claude should invoke this skill when:
@@ -39,6 +49,8 @@ Claude should invoke this skill when:
 - Simple use cases
 
 ### 2. Query Report Structure
+
+> **Security — parameterize all filters.** Bind every user-supplied value with a named placeholder (`%(filter_name)s`) passed via the `filters` dict. NEVER string-format or f-string a user value into SQL — that is an injection hole. Building the WHERE clause by concatenating *parameterized* fragments (each still using `%(...)s`) is acceptable, but the values themselves must always travel through the bound `filters` dict, never through the SQL string.
 
 **Basic Query Report JSON:**
 ```json
@@ -142,6 +154,8 @@ def get_conditions(filters):
 ```
 
 ### 3. Script Report Structure
+
+In `execute(filters)`, prefer `frappe.db.get_all` / `frappe.qb.get_query` over raw SQL wherever they suffice — `get_query` handles joins, aggregations, and child-table fields. For user-facing data, use `frappe.db.get_list` so row-level permissions are enforced (`get_all` ignores them). Never call `frappe.db.commit()` in a report — reports are read-only.
 
 **Advanced Script Report:**
 ```python
@@ -465,12 +479,12 @@ def get_data(filters):
 def get_data(filters):
     cache_key = f"sales_report_{filters.get('from_date')}_{filters.get('to_date')}"
 
-    data = frappe.cache().get_value(cache_key)
+    data = frappe.cache.get_value(cache_key)
     if data:
         return data
 
     data = frappe.db.sql(query, filters, as_dict=1)
-    frappe.cache().set_value(cache_key, data, expires_in_sec=300)
+    frappe.cache.set_value(cache_key, data, expires_in_sec=300)
 
     return data
 ```

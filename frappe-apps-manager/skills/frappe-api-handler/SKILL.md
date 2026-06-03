@@ -7,6 +7,16 @@ description: Create custom API endpoints and whitelisted methods for Frappe appl
 
 Create secure, efficient custom API endpoints for Frappe applications.
 
+## Global Rules
+
+These Frappe conventions apply to everything this skill generates, and override any conflicting example below.
+
+- **Bench commands:** use bare `bench` (never `./env/bin/bench` or a full path). Always pass `--site <site>` explicitly — never run a bare `bench migrate` / `bench run-tests`. Run `bench start` in the background and only if it isn't already running. Don't run discovery commands (`which bench`, `bench --version`).
+- **DocType files** live at `apps/<app>/<app>/<module>/doctype/<name>/<name>.json` — the app name appears twice (directory + Python package) — with an empty `__init__.py` alongside. Never `mkdir` the folder; write the JSON and run `bench --site <site> migrate` to create the structure. Don't add `creation`, `modified`, `owner`, `modified_by`, or `docstatus` as fields — Frappe manages them.
+- **Database & ORM:** prefer `frappe.qb.get_query()` over raw `frappe.db.sql()`. Use `frappe.db.get_all()` for server logic (ignores permissions) and `frappe.db.get_list()` for user-facing APIs (enforces them). Never use `frappe.db.set_value()` on a field with validation or lifecycle logic — load the doc and `doc.save()` so controller hooks run. Batch-fetch related records; never query inside a loop (N+1).
+- **Never call `frappe.db.commit()`** in controllers, request handlers, background jobs, or patches — Frappe auto-commits on success and rolls back on uncaught errors. Flush manually only to make a write visible to a subsequent `frappe.enqueue()` (or pass `enqueue_after_commit=True`).
+- **Permissions & APIs:** put permission checks inside controller methods (enforced on every call path), not in API wrappers. Type-hint every `@frappe.whitelist()` parameter so Frappe validates and casts it, and pass `methods=[...]` to pin the HTTP verb.
+
 ## When to Use This Skill
 
 Claude should invoke this skill when:
@@ -20,16 +30,16 @@ Claude should invoke this skill when:
 
 ### 1. Whitelisted Methods
 
-Create Python methods accessible via API:
+Create Python methods accessible via API. Always type-hint parameters (Frappe validates and casts args by type hint, preventing type-confusion; without hints all args arrive as untrusted strings) and pin the HTTP verb with `methods=[...]`:
 
 ```python
 import frappe
 from frappe import _
 
-@frappe.whitelist()
-def get_customer_details(customer_name):
+@frappe.whitelist(methods=["GET"])
+def get_customer_details(customer_name: str):
     """Get customer details with validation"""
-    # Permission check
+    # Permission check (mirror the controller; keep checks on every call path)
     if not frappe.has_permission("Customer", "read"):
         frappe.throw(_("Not permitted"), frappe.PermissionError)
 
@@ -48,15 +58,16 @@ def get_customer_details(customer_name):
 
 **Public Methods (No Authentication):**
 ```python
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["GET"])
 def public_api_method():
-    """Accessible without login"""
+    """Accessible without login. Return only fields guests need — never leak
+    user emails, internal IDs, or permission-sensitive data."""
     return {"message": "Public data"}
 ```
 
 **Authenticated Methods:**
 ```python
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET"])
 def authenticated_method():
     """Requires valid session or API key"""
     user = frappe.session.user
@@ -65,8 +76,8 @@ def authenticated_method():
 
 **Permission-based Methods:**
 ```python
-@frappe.whitelist()
-def delete_customer(customer_name):
+@frappe.whitelist(methods=["POST"])
+def delete_customer(customer_name: str):
     """Check permissions before action"""
     if not frappe.has_permission("Customer", "delete"):
         frappe.throw(_("Not permitted"))
@@ -77,18 +88,15 @@ def delete_customer(customer_name):
 
 ### 3. REST API Endpoints
 
-**GET Request Handler:**
+**GET Request Handler:** (use `get_list` for user-facing reads so DocType permissions are enforced)
 ```python
-@frappe.whitelist()
-def get_items(filters=None, fields=None, limit=20):
+@frappe.whitelist(methods=["GET"])
+def get_items(filters: dict | None = None, fields: list | None = None, limit: int = 20):
     """Get list of items with filters"""
-    filters = frappe.parse_json(filters) if isinstance(filters, str) else filters or {}
-    fields = frappe.parse_json(fields) if isinstance(fields, str) else fields or ["*"]
-
-    items = frappe.get_all(
+    items = frappe.get_list(
         "Item",
-        filters=filters,
-        fields=fields,
+        filters=filters or {},
+        fields=fields or ["name"],
         limit=limit,
         order_by="creation desc"
     )
@@ -98,11 +106,9 @@ def get_items(filters=None, fields=None, limit=20):
 
 **POST Request Handler:**
 ```python
-@frappe.whitelist()
-def create_sales_order(customer, items, delivery_date=None):
-    """Create sales order from API"""
-    items = frappe.parse_json(items) if isinstance(items, str) else items
-
+@frappe.whitelist(methods=["POST"])
+def create_sales_order(customer: str, items: list, delivery_date: str | None = None):
+    """Create sales order from API. No frappe.db.commit() — Frappe commits POST on success."""
     doc = frappe.get_doc({
         "doctype": "Sales Order",
         "customer": customer,
@@ -118,11 +124,9 @@ def create_sales_order(customer, items, delivery_date=None):
 
 **PUT/UPDATE Handler:**
 ```python
-@frappe.whitelist()
-def update_customer(customer_name, data):
+@frappe.whitelist(methods=["PUT"])
+def update_customer(customer_name: str, data: dict):
     """Update customer details"""
-    data = frappe.parse_json(data) if isinstance(data, str) else data
-
     doc = frappe.get_doc("Customer", customer_name)
     doc.update(data)
     doc.save()
@@ -132,8 +136,8 @@ def update_customer(customer_name, data):
 
 **DELETE Handler:**
 ```python
-@frappe.whitelist()
-def delete_document(doctype, name):
+@frappe.whitelist(methods=["DELETE"])
+def delete_document(doctype: str, name: str):
     """Delete a document"""
     if not frappe.has_permission(doctype, "delete"):
         frappe.throw(_("Not permitted"))
@@ -145,8 +149,8 @@ def delete_document(doctype, name):
 ### 4. Error Handling
 
 ```python
-@frappe.whitelist()
-def safe_api_method(param):
+@frappe.whitelist(methods=["POST"])
+def safe_api_method(param: str):
     """API method with proper error handling"""
     try:
         # Validate input
@@ -170,8 +174,8 @@ def safe_api_method(param):
 ### 5. Input Validation
 
 ```python
-@frappe.whitelist()
-def validated_method(email, phone, amount):
+@frappe.whitelist(methods=["POST"])
+def validated_method(email: str, phone: str, amount: float):
     """Validate all inputs"""
     # Email validation
     if not frappe.utils.validate_email_address(email):
@@ -192,22 +196,19 @@ def validated_method(email, phone, amount):
 ### 6. Pagination
 
 ```python
-@frappe.whitelist()
-def paginated_list(doctype, page=1, page_size=20, filters=None):
+@frappe.whitelist(methods=["GET"])
+def paginated_list(doctype: str, page: int = 1, page_size: int = 20, filters: dict | None = None):
     """Get paginated results"""
-    filters = frappe.parse_json(filters) if isinstance(filters, str) else filters or {}
-
-    page = frappe.utils.cint(page)
-    page_size = frappe.utils.cint(page_size)
+    filters = filters or {}
 
     # Get total count
     total = frappe.db.count(doctype, filters=filters)
 
-    # Get data
-    data = frappe.get_all(
+    # Get data (get_list enforces DocType permissions for the calling user)
+    data = frappe.get_list(
         doctype,
         filters=filters,
-        fields=["*"],
+        fields=["name"],
         start=(page - 1) * page_size,
         page_length=page_size,
         order_by="creation desc"
@@ -225,7 +226,7 @@ def paginated_list(doctype, page=1, page_size=20, filters=None):
 ### 7. File Upload Handling
 
 ```python
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def upload_file():
     """Handle file upload"""
     from frappe.utils.file_manager import save_file
@@ -253,11 +254,10 @@ def upload_file():
 ### 8. Bulk Operations
 
 ```python
-@frappe.whitelist()
-def bulk_create(doctype, records):
-    """Create multiple documents"""
-    records = frappe.parse_json(records) if isinstance(records, str) else records
-
+@frappe.whitelist(methods=["POST"])
+def bulk_create(doctype: str, records: list):
+    """Create multiple documents. For plain CRUD, prefer the built-in
+    /api/v2/document/<DocType>/bulk_update endpoint instead of a custom method."""
     created = []
     errors = []
 
@@ -314,7 +314,7 @@ return {
 
 **API Key/Secret:**
 ```python
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def api_key_method():
     """Authenticate using API key"""
     api_key = frappe.get_request_header("Authorization")
@@ -335,7 +335,7 @@ def api_key_method():
 
 **Token-based:**
 ```python
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def token_auth():
     """JWT or custom token authentication"""
     token = frappe.get_request_header("Authorization", "").replace("Bearer ", "")
@@ -350,9 +350,32 @@ def token_auth():
     return {"authenticated": True}
 ```
 
+## Built-in v2 REST API
+
+Frappe v15+ auto-generates CRUD — don't write custom endpoints for plain create/read/update/delete:
+
+```
+GET    /api/v2/document/<DocType>                          # list (fields, filters, order_by, start, limit)
+POST   /api/v2/document/<DocType>                          # create
+GET    /api/v2/document/<DocType>/<name>/                  # read
+PUT    /api/v2/document/<DocType>/<name>/                  # update
+DELETE /api/v2/document/<DocType>/<name>/                  # delete
+POST   /api/v2/document/<DocType>/<name>/method/<method>   # call a doc-level method
+POST   /api/v2/method/<DocType>/<method>                   # call a doctype-level function
+POST   /api/v2/document/<DocType>/bulk_update              # body: {"docs": [{"name": "...", ...}]}
+POST   /api/v2/document/<DocType>/bulk_delete              # body: {"names": [...]}
+```
+
+List responses include a `has_next_page` boolean for pagination. Large bulk operations are auto-enqueued as background jobs. Only write a custom `@frappe.whitelist()` endpoint for logic that goes beyond CRUD.
+
+## Doc-level methods vs DocType-level functions
+
+- **Doc-level methods** are `@frappe.whitelist()` methods on the `Document` subclass (operate on `self`). Call them via `frm.call("approve")` in client JS, or `POST /api/v2/document/<DocType>/<name>/method/approve`.
+- **DocType-level functions** are module-level `@frappe.whitelist()` functions in the controller file. Call them via the full dotted path (`method: "myapp.mymodule.doctype.expense.expense.get_summary"`) or `POST /api/v2/method/<DocType>/get_summary`. The legacy `POST /api/method/<dotted.path>` also works for module-level functions.
+
 ## API Endpoint URLs
 
-Methods are accessible at:
+Module-level whitelisted functions are accessible at:
 ```
 /api/method/{app_name}.{module}.{file}.{method_name}
 ```
@@ -369,16 +392,22 @@ Content-Type: application/json
 
 ## Best Practices
 
-1. **Always validate inputs** - Never trust user data
-2. **Check permissions** - Use `frappe.has_permission()`
+1. **Always validate inputs** - Type-hint params; never trust user data
+2. **Check permissions** - Inside controller methods (every call path), not API wrappers
 3. **Handle errors gracefully** - Return user-friendly messages
 4. **Log errors** - Use `frappe.log_error()` for debugging
-5. **Use transactions** - Wrap multiple operations in `frappe.db.commit()`
+5. **Never call `frappe.db.commit()` yourself** - Frappe auto-commits POST/PUT requests on success and rolls back on uncaught errors
 6. **Rate limiting** - Consider implementing for public APIs
 7. **Version your APIs** - Include version in URL or headers
 8. **Document your APIs** - Provide clear documentation
-9. **Use HTTP status codes** - Return appropriate codes
+9. **Pin the HTTP verb** - Pass `methods=[...]` on every endpoint
 10. **Sanitize output** - Don't expose sensitive data
+
+## Anti-patterns
+
+- **Don't wrap a doc's whitelisted method in a standalone `api.py` function.** If the controller method is whitelisted, clients call it directly via `frm.call("approve")` or `POST /api/v2/document/<DocType>/<name>/method/approve` — don't add a separate function that just fetches the doc and calls it.
+- **Don't put doc-scoped logic in standalone APIs.** A function that fetches one doc, validates the caller, and acts on it belongs as a doc-level method. Reserve `api/` files for cross-document operations, aggregations, and endpoints with no document context.
+- **Don't leak sensitive fields in `allow_guest=True` endpoints.** Return only what guests need — never user emails, internal IDs, or permission-sensitive data.
 
 ## File Location
 

@@ -7,6 +7,16 @@ description: Generate API documentation, user guides, and technical documentatio
 
 Generate comprehensive documentation for Frappe applications including API documentation, user guides, and OpenAPI specifications.
 
+## Global Rules
+
+These Frappe conventions apply to everything this skill generates, and override any conflicting example below.
+
+- **Bench commands:** use bare `bench` (never `./env/bin/bench` or a full path). Always pass `--site <site>` explicitly — never run a bare `bench migrate` / `bench run-tests`. Run `bench start` in the background and only if it isn't already running. Don't run discovery commands (`which bench`, `bench --version`).
+- **DocType files** live at `apps/<app>/<app>/<module>/doctype/<name>/<name>.json` — the app name appears twice (directory + Python package) — with an empty `__init__.py` alongside. Never `mkdir` the folder; write the JSON and run `bench --site <site> migrate` to create the structure. Don't add `creation`, `modified`, `owner`, `modified_by`, or `docstatus` as fields — Frappe manages them.
+- **Database & ORM:** prefer `frappe.qb.get_query()` over raw `frappe.db.sql()`. Use `frappe.db.get_all()` for server logic (ignores permissions) and `frappe.db.get_list()` for user-facing APIs (enforces them). Never use `frappe.db.set_value()` on a field with validation or lifecycle logic — load the doc and `doc.save()` so controller hooks run. Batch-fetch related records; never query inside a loop (N+1).
+- **Never call `frappe.db.commit()`** in controllers, request handlers, background jobs, or patches — Frappe auto-commits on success and rolls back on uncaught errors. Flush manually only to make a write visible to a subsequent `frappe.enqueue()` (or pass `enqueue_after_commit=True`).
+- **Permissions & APIs:** put permission checks inside controller methods (enforced on every call path), not in API wrappers. Type-hint every `@frappe.whitelist()` parameter so Frappe validates and casts it, and pass `methods=[...]` to pin the HTTP verb.
+
 ## When to Use This Skill
 
 Claude should invoke this skill when:
@@ -20,10 +30,10 @@ Claude should invoke this skill when:
 
 ### 1. API Documentation
 
-**Whitelisted Method Documentation:**
+**Whitelisted Method Documentation:** document the type-hinted signature, the declared HTTP method(s), and the v2 endpoint URL with token auth.
 ```python
-@frappe.whitelist()
-def get_customer_details(customer):
+@frappe.whitelist(methods=["GET"])
+def get_customer_details(customer: str):
     """
     Get detailed customer information
 
@@ -52,11 +62,11 @@ def get_customer_details(customer):
             ...
         }
 
-    Endpoint:
-        POST /api/method/my_app.api.get_customer_details
-        {
-            "customer": "CUST-001"
-        }
+    Endpoint (module-level function):
+        POST /api/v2/method/Customer/get_customer_details
+        Authorization: token <api_key>:<api_secret>
+        Content-Type: application/json
+        { "customer": "CUST-001" }
     """
     if not frappe.has_permission('Customer', 'read'):
         frappe.throw(_('Not permitted'), frappe.PermissionError)
@@ -84,28 +94,34 @@ info:
   description: API documentation for My Frappe App
 
 servers:
-  - url: https://example.com/api
+  - url: https://example.com/api/v2
     description: Production server
 
+components:
+  securitySchemes:
+    tokenAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: 'Use: token <api_key>:<api_secret>'
+
+security:
+  - tokenAuth: []
+
 paths:
-  /method/my_app.api.get_customer_details:
-    post:
+  /method/Customer/get_customer_details:
+    get:
       summary: Get customer details
       description: Retrieve detailed information for a customer
       tags:
         - Customers
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                customer:
-                  type: string
-                  description: Customer ID
-              required:
-                - customer
+      parameters:
+        - in: query
+          name: customer
+          required: true
+          schema:
+            type: string
+          description: Customer ID
       responses:
         '200':
           description: Customer details
@@ -175,6 +191,18 @@ View all customer transactions:
 - Set default price lists per customer
 - Configure payment terms for auto-fill
 ```
+
+## API Documentation Conventions
+
+When documenting Frappe APIs:
+
+- Show **type-hinted** `@frappe.whitelist()` signatures with the declared `methods=[...]`.
+- Use **v2 endpoint URLs**: doc-level methods at `POST /api/v2/document/<DocType>/<name>/method/<method>`, doctype-level functions at `POST /api/v2/method/<DocType>/<func>`, and built-in CRUD at `/api/v2/document/<DocType>` (GET list / POST create / GET-PUT-DELETE `/<name>/`).
+- Document **token auth** via the header `Authorization: token <api_key>:<api_secret>`.
+
+**Cross-references:**
+- API surfaces to document come from the `frappe-api-handler` skill.
+- The data model (DocTypes, fields, links) comes from the `frappe-doctype-architect` skill.
 
 ## References
 
